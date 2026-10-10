@@ -29,6 +29,7 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import {
   activateMcpLoopbackClientGrantCapture,
+  bindMcpLoopbackClientGrantAdmission,
   mintMcpLoopbackClientGrant,
   revokeMcpLoopbackClientGrant,
   type McpLoopbackRequestContext,
@@ -279,4 +280,87 @@ it("routes a command started by a conversation's completion turn back to that co
       }),
     }),
   ]);
+});
+
+it("executes CLI-backend mediated exec under secret egress when admission is bound after mint", async () => {
+  // Mirrors the CLI-runner grant lifecycle (src/agents/cli-runner/prepare.ts): the grant is
+  // minted during tool projection before the final admission is known, and the live admission
+  // is bound onto the stored grant afterward via bindMcpLoopbackClientGrantAdmission, exactly
+  // as prepare.ts's bindMcpClientGrantAdmission does right before the CLI backend starts.
+  const runtime = getActiveMcpLoopbackRuntime();
+  if (!runtime) {
+    throw new Error("Expected the isolated MCP runtime");
+  }
+  const runId = "mcp-cli-backend-bound-after-mint";
+  const admission = prepareAgentRunAdmission({
+    cfg: config,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: {
+      runId,
+      agentId: "probe",
+      ingress: { kind: "schedule", boundary: "cli.backend", state: "present" },
+    },
+  });
+  admissions.push(admission);
+  const admittedRunContext = await admission.admit("gateway");
+  const grant = mintMcpLoopbackClientGrant({
+    runtimeOwnerToken: runtime.ownerToken,
+    // CLI backend grants always carry nodeExecAllowed; explicit toolsAllow still forces the
+    // gateway-hosted, loopback-mediated exec factory instead of the node-only exec surface.
+    admittedRunContext: undefined,
+    context: {
+      sessionKey: "agent:probe:cli:mcp-egress-bound",
+      agentId: "probe",
+      runId,
+      workspaceDir: state.workspaceDir,
+      cwd: state.workspaceDir,
+      senderIsOwner: true,
+      nodeExecAllowed: true,
+      toolsAllow: ["exec"],
+    },
+  });
+  grants.push(grant.token);
+  expect(
+    bindMcpLoopbackClientGrantAdmission({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      admittedRunContext,
+    }),
+  ).toBe(true);
+  const captureKey = "capture-" + runId;
+  expect(
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: runtime.ownerToken,
+      captureKey,
+    }),
+  ).not.toBe(false);
+  const request = async (method: "tools/list" | "tools/call") =>
+    fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${grant.token}`,
+        "content-type": "application/json",
+        "x-openclaw-cli-capture-key": captureKey,
+      },
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id: 1,
+        method,
+        ...(method === "tools/call"
+          ? { params: { name: "exec", arguments: { command: "echo mcp-cli-egress-ok" } } }
+          : {}),
+      }),
+    });
+  const listed = await request("tools/list");
+  expect(listed.status).toBe(200);
+  expect(await listed.json()).toMatchObject({ result: { tools: [{ name: "exec" }] } });
+  const executed = await request("tools/call");
+  expect(executed.status).toBe(200);
+  expect(await executed.json()).toMatchObject({
+    result: {
+      isError: false,
+      content: [expect.objectContaining({ text: expect.stringContaining("mcp-cli-egress-ok") })],
+    },
+  });
 });
