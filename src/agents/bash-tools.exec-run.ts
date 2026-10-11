@@ -429,7 +429,14 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         const useSecretEgress = secretEgressEnabled && host === "gateway";
         if (useSecretEgress) {
           if (!defaults?.operationalRunInstance) {
-            throw new Error("Secret egress proxy requires an admitted agent run instance");
+            // The structured `code` property (not the message text, which is
+            // untrusted free text) is what lets cron classify this as an
+            // execution denial instead of a silently-ignored failure — see
+            // TOOL_DENIAL_ERROR_CODES / extractToolErrorCode.
+            throw Object.assign(
+              new Error("Secret egress proxy requires an admitted agent run instance"),
+              { code: "SYSTEM_RUN_DENIED" },
+            );
           }
           assertSourceActive();
         }

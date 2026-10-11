@@ -107,6 +107,18 @@ describe("tool errors", () => {
       "UNAVAILABLE: SYSTEM_RUN_DENIED: approval required",
     );
   });
+
+  it("classifies a secret-egress-proxy exec denial via its structured code", () => {
+    // Regression for a cron run where every exec call was blocked by this
+    // denial and the structured code was missing: extractToolErrorCode
+    // returned undefined, so the run finished as a false "ok".
+    const error = Object.assign(
+      new Error("Secret egress proxy requires an admitted agent run instance"),
+      { code: "SYSTEM_RUN_DENIED" },
+    );
+    const result = buildToolLifecycleErrorResult(error);
+    expect(extractToolErrorCode(result)).toBe("SYSTEM_RUN_DENIED");
+  });
 });
 
 describe("tool sanitization", () => {

@@ -25,6 +25,30 @@ describe("resolveEmbeddedRunFailureSignal", () => {
     });
   });
 
+  it("classifies a secret-egress-proxy exec denial as fatal for cron", () => {
+    // Regression: every required exec call blocked by this denial, with no
+    // structured code attached at the throw site, left the run classified
+    // "ok" with a null error_text (cron_run_receipts). The throw site now
+    // attaches errorCode: "SYSTEM_RUN_DENIED" (see bash-tools.exec-run.ts).
+    expect(
+      resolveEmbeddedRunFailureSignal({
+        trigger: "cron",
+        lastToolError: {
+          toolName: "exec",
+          errorCode: "SYSTEM_RUN_DENIED",
+          error: "Secret egress proxy requires an admitted agent run instance",
+        },
+      }),
+    ).toEqual({
+      kind: "execution_denied",
+      source: "tool",
+      toolName: "exec",
+      code: "SYSTEM_RUN_DENIED",
+      message: "Secret egress proxy requires an admitted agent run instance",
+      fatalForCron: true,
+    });
+  });
+
   it("classifies invalid request denials from tool error metadata", () => {
     expect(
       resolveEmbeddedRunFailureSignal({
