@@ -309,11 +309,15 @@ describe("cron failure alert persistence", () => {
     });
 
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    // Regression: this run did not request its own alert (dedup/cooldown
+    // suppressed it), so the prior run's recorded delivery fact
+    // ("unknown", not yet settled in this test) must be preserved rather
+    // than clobbered back to "not-requested" — see timer-outcomes.ts.
     expect((await loadCronStore(store.storePath)).jobs[0]).toMatchObject({
       state: {
         consecutiveErrors: 2,
         lastFailureAlertAtMs: firstAlertAt,
-        lastFailureNotificationDeliveryStatus: "not-requested",
+        lastFailureNotificationDeliveryStatus: "unknown",
       },
     });
 
@@ -346,9 +350,157 @@ describe("cron failure alert persistence", () => {
       endedAt: now + 10,
     });
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    expect(
-      (await loadCronStore(store.storePath)).jobs[0]?.state.failureAlertIncident,
-    ).toBeUndefined();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      failureAlertIncident: undefined,
+      // A run that actually resolves the failure chain (completionStatus
+      // succeeded) is the one case that clears the prior delivery fact.
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
+  });
+
+  it("preserves a prior delivered-or-unknown outcome across a second failure suppressed by cooldown alone", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-02T09:00:00.000Z");
+    const firstAlertAt = dueAt + 10;
+    const job = createAlertJob({ id: "cooldown-only-suppression", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    let now = firstAlertAt;
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      sendCronFailureAlert,
+    });
+
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "disk pressure on backup volume",
+      startedAt: dueAt,
+      endedAt: firstAlertAt,
+    });
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      lastFailureAlertAtMs: firstAlertAt,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
+
+    // A second, genuinely different failure inside the 60s cooldown window.
+    // Different error text rules out incident-signature dedup as the cause
+    // of suppression here — only the cooldown should be suppressing this one.
+    now += 30_000;
+    const currentJob = state.store?.jobs[0];
+    if (!currentJob) {
+      throw new Error("expected persisted cron job");
+    }
+    await finalizeAlertOutcome({
+      state,
+      job: currentJob,
+      status: "error",
+      error: "network timeout contacting backup target",
+      startedAt: now,
+      endedAt: now + 10,
+    });
+
+    // Regression for the core bug: no second send happened (still suppressed,
+    // this time purely by cooldown), and the job's lastFailureAlertAtMs did
+    // not advance — so the first alert's recorded outcome must still be the
+    // value read back, not reset to "not-requested" by this run's own
+    // finalization.
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      consecutiveErrors: 2,
+      lastFailureAlertAtMs: firstAlertAt,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
+  });
+
+  it("alerts once after a timeout error at after:1, then clears failure-notification state on the next successful run", async () => {
+    const store = fixtures.makeStorePath();
+    const dueAt = Date.parse("2026-08-03T10:00:00.000Z");
+    const job = createAlertJob({ id: "timeout-after-one-then-recovers", dueAt });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    let now = dueAt + 10;
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      sendCronFailureAlert,
+    });
+
+    // A single timeout error with after:1 must alert on the very first failure.
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "error",
+      error: "cron: job execution timed out (last phase: tool-execution-started)",
+      startedAt: dueAt,
+      endedAt: now,
+    });
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      lastFailureAlertAtMs: now,
+      lastFailureNotificationDeliveryStatus: "unknown",
+    });
+
+    now += 300_000;
+    const recoveredJob = state.store?.jobs[0];
+    if (!recoveredJob) {
+      throw new Error("expected persisted cron job");
+    }
+    await finalizeAlertOutcome({
+      state,
+      job: recoveredJob,
+      status: "ok",
+      startedAt: now,
+      endedAt: now + 10,
+    });
+
+    // A successful run is the one case that clears the failure-notification
+    // fields, independent of cooldown — this is the "resolves the chain" path.
+    expect(sendCronFailureAlert).toHaveBeenCalledOnce();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      lastFailureAlertAtMs: undefined,
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
+  });
+
+  it("does not misclassify a run as failed, and never touches failure-notification state, when the run ultimately succeeds", async () => {
+    // Boundary case for this fix: proving the failure-notification
+    // preservation change is scoped to bookkeeping fields only and does not
+    // broaden what counts as a failed *run* — an ordinary successful
+    // completion (standing in for "an intermediate tool error that the agent
+    // recovered from before finishing") must never request or record a
+    // failure alert at all.
+    const store = fixtures.makeStorePath();
+    const now = Date.parse("2026-08-04T11:00:00.000Z");
+    const job = createAlertJob({ id: "ordinary-success-no-alert", dueAt: now });
+    await saveCronStore(store.storePath, { version: 1, jobs: [job] });
+
+    const sendCronFailureAlert = vi.fn<SendCronFailureAlert>(async () => undefined);
+    const state = createAlertState({
+      storePath: store.storePath,
+      nowMs: () => now,
+      sendCronFailureAlert,
+    });
+
+    await finalizeAlertOutcome({
+      state,
+      job,
+      status: "ok",
+      startedAt: now,
+      endedAt: now + 10,
+    });
+
+    expect(sendCronFailureAlert).not.toHaveBeenCalled();
+    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+      consecutiveErrors: 0,
+      lastFailureAlertAtMs: undefined,
+      lastFailureNotificationDeliveryStatus: "not-requested",
+    });
   });
 
   it("keeps a trigger incident unresolved while its quiet evaluation is busy", () => {

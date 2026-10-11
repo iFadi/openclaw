@@ -155,9 +155,14 @@ export function applyJobResult(
   job.state.lastDeliveryStatus = deliveryState.status;
   job.state.deliverySuppressionReason = deliveryState.deliverySuppressionReason;
   job.state.lastDeliveryError = deliveryState.error;
-  job.state.lastFailureNotificationDelivered = undefined;
-  job.state.lastFailureNotificationDeliveryStatus = "not-requested";
-  job.state.lastFailureNotificationDeliveryError = undefined;
+  // Do not clear lastFailureNotification* here unconditionally: a run that
+  // doesn't request its own alert (cooldown-suppressed, below threshold, or a
+  // skip without includeSkipped) must preserve whatever delivery fact a prior
+  // run already recorded, not overwrite it with "not-requested". These fields
+  // are only reset below, alongside lastFailureAlertAtMs, when a run actually
+  // resolves the failure chain (completionStatus === "succeeded"). A run that
+  // does request its own alert overwrites them itself via
+  // requestFailureNotification (see failure-alerts.ts).
   job.updatedAtMs = result.endedAt;
   const completionStatus =
     result.completionStatus ??
@@ -217,6 +222,9 @@ export function applyJobResult(
     job.state.consecutiveSkipped = 0;
     if (completionStatus === "succeeded") {
       job.state.lastFailureAlertAtMs = undefined;
+      job.state.lastFailureNotificationDelivered = undefined;
+      job.state.lastFailureNotificationDeliveryStatus = "not-requested";
+      job.state.lastFailureNotificationDeliveryError = undefined;
     }
   }
 
