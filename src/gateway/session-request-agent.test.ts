@@ -145,6 +145,23 @@ describe("requested session agent ownership", () => {
       ),
     ).toMatchObject({ ok: false, error: { code: "INVALID_REQUEST" } });
   });
+
+  it("admits an ACP-allowed agent id with no agents.entries record", () => {
+    // "codex" owns a real session store (acp.allowedAgents) but has no
+    // agents.entries record. An explicit agentId for it must not throw
+    // "Unknown agent id" — isConfiguredSessionStoreAgentId (used by
+    // sessions-search-tool.ts to decide which stores to even query) already
+    // treats this as configured, and this validation must agree with it.
+    const cfg: OpenClawConfig = {
+      agents: { ownership: "explicit", entries: { main: {} } },
+      acp: { allowedAgents: ["codex"] },
+    };
+
+    expect(resolveRequestedSessionAgentId(cfg, "agent:codex:leftover", "codex")).toEqual({
+      ok: true,
+      agentId: "codex",
+    });
+  });
 });
 
 describe("session event agent scope", () => {

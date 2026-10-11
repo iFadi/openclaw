@@ -8,6 +8,7 @@ import {
 import { tryResolveLegacyCompatibilityAgentId } from "../config/legacy.default-agent-owner.js";
 import { resolveAgentMainSessionKey } from "../config/sessions/main-session.js";
 import { resolvePersistedSessionStoreOwnerForKey } from "../config/sessions/session-store-owner.js";
+import { listConfiguredSessionStoreAgentIds } from "../config/sessions/targets-configured-agents.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   classifySessionKeyShape,
@@ -144,7 +145,12 @@ export function resolveRequestedSessionAgentId(
     return input;
   }
   const parsed = parseAgentSessionKey(key?.trim());
-  const configuredAgentIds = listAgentIds(cfg);
+  // Agents without an agents.entries record can still legitimately own a
+  // session store (e.g. an ACP-allowed agent id) — validate against that
+  // wider, store-ownership definition rather than the entries-only roster,
+  // so this throw agrees with isConfiguredSessionStoreAgentId's definition
+  // of "configured" used by callers scoping a search/list across stores.
+  const configuredAgentIds = listConfiguredSessionStoreAgentIds(cfg);
   const normalizedRequestedAgentId = input.value;
   if (normalizedRequestedAgentId && !configuredAgentIds.includes(normalizedRequestedAgentId)) {
     return invalidSessionRequest(`Unknown agent id "${explicitAgentId}"`);
