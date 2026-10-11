@@ -242,6 +242,34 @@ describe("sessions_search tool", () => {
     ).not.toContain(incognitoKey);
   });
 
+  it("skips visible sessions owned by a runtime-created directory with no config entry instead of failing the whole search", async () => {
+    const requests: CallGatewayRequest[] = [];
+    const tool = createTool({
+      requests,
+      agentId: "main",
+      config: {
+        tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
+        agents: { entries: { main: {}, work: {} } },
+      },
+      results: [
+        hit({ sessionKey: "agent:work:other", agentId: "work", messageId: "work-hit" }),
+        // "codex" has a real sessions.list row (the runtime created the directory
+        // directly) but no agents.entries config and no acp allowlist entry.
+        hit({ sessionKey: "agent:codex:leftover", agentId: "codex", messageId: "codex-hit" }),
+      ],
+    });
+
+    const result = await tool.execute("call-1", { query: "text" });
+
+    const searchRequests = requests.filter((request) => request.method === "sessions.search");
+    expect(searchRequests.map((request) => request.params)).not.toContainEqual(
+      expect.objectContaining({ agentId: "codex" }),
+    );
+    expect(result.details).toMatchObject({
+      results: [expect.objectContaining({ sessionKey: "agent:work:other" })],
+    });
+  });
+
   it("excludes foreign unscoped sessions that cannot be reopened by session key", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({

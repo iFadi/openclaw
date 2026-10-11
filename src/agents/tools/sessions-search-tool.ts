@@ -1,4 +1,5 @@
 import { Type, type Static } from "typebox";
+import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
@@ -493,6 +494,14 @@ export function createSessionsSearchTool(opts?: {
       for (const [agentId, candidates] of [...sessionsByAgent].toSorted(([left], [right]) =>
         left.localeCompare(right),
       )) {
+        // A visible session row can belong to a runtime-created directory with no
+        // config entry (e.g. a bare "codex"/"openclaw" agent dir created by the
+        // runtime itself, not an agent). sessions.search validates agentId against
+        // the configured roster and throws for anything outside it, so skip those
+        // candidates here instead of taking down the whole call for every caller.
+        if (!isConfiguredSessionStoreAgentId(cfg, agentId)) {
+          continue;
+        }
         for (
           let offset = 0;
           offset < candidates.length;
