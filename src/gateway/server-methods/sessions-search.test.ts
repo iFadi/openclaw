@@ -406,6 +406,35 @@ describe("sessions.search gateway method", () => {
     });
   });
 
+  it("accepts an ACP-allowed agent id that has no agents.entries record", async () => {
+    // "codex" owns a real session store via acp.allowedAgents but has no
+    // agents.entries record — resolveSessionSearchScope must admit it
+    // directly rather than throwing "Unknown agent id" through the shared,
+    // entries-only resolveRequestedSessionAgentId.
+    cfg = {
+      agents: {
+        ownership: "explicit",
+        defaults: { systemAgent: { agentId: "main" } },
+        entries: { main: {}, work: {} },
+      },
+      acp: { allowedAgents: ["codex"] },
+    };
+
+    await callSearch({
+      agentId: "codex",
+      query: "needle",
+      sessionKeys: ["agent:codex:leftover"],
+    });
+
+    expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
+      agentId: "codex",
+      query: "needle",
+      limit: undefined,
+      sessionKeys: ["agent:codex:leftover"],
+      storePath: expect.any(String),
+    });
+  });
+
   it("uses the configured system agent without a session filter", async () => {
     await callSearch({ query: "needle" });
     expect(searchSessionTranscriptsMock).toHaveBeenCalledWith({
