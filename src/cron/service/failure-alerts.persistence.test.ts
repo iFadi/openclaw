@@ -350,10 +350,14 @@ describe("cron failure alert persistence", () => {
       endedAt: now + 10,
     });
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-      failureAlertIncident: undefined,
-      // A run that actually resolves the failure chain (completionStatus
-      // succeeded) is the one case that clears the prior delivery fact.
+    const finalState = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    // toMatchObject treats an explicit `undefined` expectation as requiring
+    // the key to be present-but-undefined, not merely absent — assert this
+    // field separately rather than folding it into the toMatchObject below.
+    expect(finalState?.failureAlertIncident).toBeUndefined();
+    // A run that actually resolves the failure chain (completionStatus
+    // succeeded) is the one case that clears the prior delivery fact.
+    expect(finalState).toMatchObject({
       lastFailureNotificationDeliveryStatus: "not-requested",
     });
   });
@@ -462,8 +466,9 @@ describe("cron failure alert persistence", () => {
     // A successful run is the one case that clears the failure-notification
     // fields, independent of cooldown — this is the "resolves the chain" path.
     expect(sendCronFailureAlert).toHaveBeenCalledOnce();
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
-      lastFailureAlertAtMs: undefined,
+    const recoveredState = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(recoveredState?.lastFailureAlertAtMs).toBeUndefined();
+    expect(recoveredState).toMatchObject({
       lastFailureNotificationDeliveryStatus: "not-requested",
     });
   });
@@ -496,9 +501,10 @@ describe("cron failure alert persistence", () => {
     });
 
     expect(sendCronFailureAlert).not.toHaveBeenCalled();
-    expect((await loadCronStore(store.storePath)).jobs[0]?.state).toMatchObject({
+    const ordinaryState = (await loadCronStore(store.storePath)).jobs[0]?.state;
+    expect(ordinaryState?.lastFailureAlertAtMs).toBeUndefined();
+    expect(ordinaryState).toMatchObject({
       consecutiveErrors: 0,
-      lastFailureAlertAtMs: undefined,
       lastFailureNotificationDeliveryStatus: "not-requested",
     });
   });
