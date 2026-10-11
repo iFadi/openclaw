@@ -37,8 +37,21 @@ export function resolveSessionSearchScope(cfg: OpenClawConfig, params: SessionsS
       acpOwnerAgentId === requestedAgentId &&
       resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind === "none",
     );
+    // Local, sessions.search-only widening: an agent configured only via
+    // acp.allowedAgents (not agents.entries) can still legitimately own a
+    // session store row outside the narrower ACP-session-key shape
+    // configuredAcpOwner checks above. Scoped to this file deliberately —
+    // the shared resolveRequestedSessionAgentId stays strict for its other
+    // ~60 callers, several of which use it for authorization decisions with
+    // no test coverage to verify a widened definition against.
+    const configuredNonRosterOwner = Boolean(
+      requestedAgentId &&
+      !rosterAgentIds.has(requestedAgentId) &&
+      isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&
+      resolvePersistedSessionStoreOwnerForKey(cfg, sessionKey).kind !== "retired",
+    );
     const requestedAgent =
-      requestedAgentId && configuredAcpOwner
+      requestedAgentId && (configuredAcpOwner || configuredNonRosterOwner)
         ? ({ ok: true, agentId: requestedAgentId } as const)
         : requestedAgentId &&
             !isConfiguredSessionStoreAgentId(cfg, requestedAgentId) &&

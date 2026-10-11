@@ -1,10 +1,11 @@
 import { Type, type Static } from "typebox";
+import { isConfiguredSessionStoreAgentId } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { jsonUtf8Bytes } from "../../infra/json-utf8-bytes.js";
 import { redactToolPayloadText } from "../../logging/redact.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../routing/session-key.js";
 import { truncateUtf16Safe } from "../../utils.js";
-import { listAgentIds, resolveSessionAgentId } from "../agent-scope.js";
+import { resolveSessionAgentId } from "../agent-scope.js";
 import { optionalPositiveIntegerSchema, requesterProfileSchema } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
@@ -496,14 +497,9 @@ export function createSessionsSearchTool(opts?: {
         // A visible session row can belong to a runtime-created directory with no
         // config entry (e.g. a bare "codex"/"openclaw" agent dir created by the
         // runtime itself, not an agent). sessions.search validates agentId against
-        // the entries-only roster and throws for anything outside it, so skip
-        // those candidates here instead of taking down the whole call for every
-        // caller. Entries-only, not isConfiguredSessionStoreAgentId (which also
-        // admits acp.allowedAgents): measured, both stray directories on this
-        // host hold zero searchable rows, so there is nothing to protect by
-        // widening past agents.entries, and keeping this strict avoids coupling
-        // the skip's definition of "configured" to the shared gateway resolver's.
-        if (!listAgentIds(cfg).includes(agentId)) {
+        // the configured roster and throws for anything outside it, so skip those
+        // candidates here instead of taking down the whole call for every caller.
+        if (!isConfiguredSessionStoreAgentId(cfg, agentId)) {
           continue;
         }
         for (

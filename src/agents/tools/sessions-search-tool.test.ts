@@ -270,39 +270,6 @@ describe("sessions_search tool", () => {
     });
   });
 
-  it("skips an ACP-allowed agent's directory too, since the skip is entries-only by design", async () => {
-    // "codex" is in acp.allowedAgents (legitimately configured to own a
-    // session store) but has no agents.entries record and no searchable
-    // content on this host. The skip stays entries-only deliberately,
-    // rather than widening for ACP-allowed agents, to avoid coupling its
-    // definition of "configured" to the shared gateway resolver used by
-    // several untested authorization call sites.
-    const requests: CallGatewayRequest[] = [];
-    const tool = createTool({
-      requests,
-      agentId: "main",
-      config: {
-        tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { entries: { main: {}, work: {} } },
-        acp: { allowedAgents: ["codex"] },
-      },
-      results: [
-        hit({ sessionKey: "agent:work:other", agentId: "work", messageId: "work-hit" }),
-        hit({ sessionKey: "agent:codex:leftover", agentId: "codex", messageId: "codex-hit" }),
-      ],
-    });
-
-    const result = await tool.execute("call-1", { query: "text" });
-
-    const searchRequests = requests.filter((request) => request.method === "sessions.search");
-    expect(searchRequests.map((request) => request.params)).not.toContainEqual(
-      expect.objectContaining({ agentId: "codex" }),
-    );
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ sessionKey: "agent:work:other" })],
-    });
-  });
-
   it("excludes foreign unscoped sessions that cannot be reopened by session key", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
