@@ -72,6 +72,7 @@ import {
   createSessionsSendSessionReaders,
   withSessionsSendRequesterSource,
 } from "./sessions-send-session-source.js";
+import { emitSessionsSendAuditEvent } from "./sessions-send-tool.audit.js";
 import {
   callSessionsSendGateway,
   createConfiguredAgentMainSession,
@@ -713,6 +714,19 @@ export function createSessionsSendTool(opts?: SessionsSendToolOptions): AnyAgent
     }),
   };
   const execute = tool.execute;
-  tool.execute = (...args) => withSessionsSendRequesterSource(opts, () => execute(...args));
+  tool.execute = (...args) =>
+    withSessionsSendRequesterSource(opts, async () => {
+      try {
+        const result = await execute(...args);
+        emitSessionsSendAuditEvent({
+          requesterAgentId: opts?.agentId ?? "unknown",
+          result: isRecord(result?.details) ? result.details : undefined,
+        });
+        return result;
+      } catch (error) {
+        emitSessionsSendAuditEvent({ requesterAgentId: opts?.agentId ?? "unknown", error });
+        throw error;
+      }
+    });
   return tool;
 }

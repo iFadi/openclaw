@@ -1,6 +1,7 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { awaitGateBeforeSettlement } from "../../../test/helpers/promise.js";
+import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
@@ -143,6 +144,53 @@ describe("sessions_send dispatch admission", () => {
     expect(consumed[0]).toContain("accepted notice");
     expect(consumed[0]).not.toContain("unaccepted notice");
     expect(runSessionsSendA2AFlow).not.toHaveBeenCalled();
+  });
+
+  it("emits a message audit event for an accepted send and a failed one, not just a tool status", async () => {
+    const auditEvents: unknown[] = [];
+    const unsubscribe = onTrustedMessageAuditEvent((event) => auditEvents.push(event));
+    try {
+      const callGateway = vi.fn();
+      callGateway.mockResolvedValue({ key: targetSessionKey, agentId: "main" });
+      const tool = createSessionsSendTool({
+        agentSessionKey: requesterSessionKey,
+        config,
+        callGateway,
+        idempotencyKey: runId,
+      });
+      await tool.execute("audit-accepted", {
+        sessionKey: targetSessionKey,
+        message: "accepted notice",
+        mode: "notify",
+      });
+      await replaceSessionEntry(
+        { agentId: "main", sessionKey: targetSessionKey },
+        { sessionId: "target-session", updatedAt: 2, communication: { receive: "never" } },
+      );
+      await tool.execute("audit-denied", {
+        sessionKey: targetSessionKey,
+        message: "unaccepted notice",
+        mode: "notify",
+      });
+    } finally {
+      unsubscribe();
+    }
+    expect(auditEvents).toEqual([
+      expect.objectContaining({
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "succeeded",
+        outcome: "sent",
+        targetId: targetSessionKey,
+      }),
+      expect.objectContaining({
+        kind: "message",
+        action: "message.outbound.finished",
+        status: "failed",
+        outcome: "failed",
+        targetId: targetSessionKey,
+      }),
+    ]);
   });
 
   it.each(["send", "receive"] as const)(
